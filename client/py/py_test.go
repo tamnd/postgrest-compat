@@ -18,15 +18,16 @@ import (
 	"github.com/tamnd/postgrest-compat/harness"
 )
 
-// PY1: Range header pagination – first 2 rows (Range: bytes=0-1)
+// PY1: Range header pagination – first 2 rows.
+// postgrest-py sends "Range: 0-1" (row units, no "bytes=" prefix).
+// PostgREST returns 200 when no count is requested, 206 when count=exact is set.
 func TestPY1_RangePagination(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos",
 		harness.P("select", "*"),
-		harness.H_("Range", "bytes=0-1"),
+		harness.H_("Range", "0-1"),
 	)
-	// 206 Partial Content when a Range header is honoured
-	r.Status(206)
+	r.StatusIn(200, 206)
 	arr := r.JSONArray()
 	if len(arr) != 2 {
 		t.Errorf("expected 2 rows, got %d", len(arr))
@@ -39,7 +40,7 @@ func TestPY2_RangeWithCount(t *testing.T) {
 	r := h.Get("/todos",
 		harness.P("select", "*"),
 		harness.H_(
-			"Range",  "bytes=0-1",
+			"Range",  "0-1",
 			"Prefer", "count=exact",
 		),
 	)
