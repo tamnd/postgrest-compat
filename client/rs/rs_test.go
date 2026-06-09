@@ -434,7 +434,7 @@ func TestRS_ILikeFilter(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if !strings.EqualFold(task[:min(len(task), 6)], "finish") {
+		if !strings.EqualFold(task[:min(len(task), 6)], "finish") { //nolint:gosimple
 			t.Errorf("row[%d] task %q does not match ilike.FINISH%%", i, task)
 		}
 	}
@@ -769,10 +769,3 @@ func TestRS_PhFts(t *testing.T) {
 	res.Status(200)
 }
 
-// min is a helper for integer minimum used in string slicing.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
