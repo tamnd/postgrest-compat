@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       postgres
+    volumes:
+      - ../../testdata/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../../testdata/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5433:5432"
+
+  dbrest:
+    image: ghcr.io/tamnd/dbrest:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./dbrest.yml:/etc/dbrest/dbrest.yml:ro
+    command: ["serve", "--config", "/etc/dbrest/dbrest.yml"]
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

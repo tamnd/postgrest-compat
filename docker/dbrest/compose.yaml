@@ -1,0 +1,48 @@
+# dbrest + PostgreSQL 18 stack.
+# Use this to run the client compat tests against dbrest.
+#
+# Build the dbrest image first (from the dbrest repo root):
+#   docker build -t dbrest:local -f Dockerfile .
+#
+#   docker compose -f docker/dbrest/compose.yaml up -d
+#
+# dbrest listens on localhost:3001.
+# PostgreSQL listens on localhost:5434.
+
+services:
+  db-dbrest:
+    image: docker.io/library/postgres:18-alpine
+    container_name: compat-pg-dbrest
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - dbrest-pg-data:/var/lib/postgresql
+      - ../../testdata:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  dbrest:
+    image: dbrest:local
+    container_name: compat-dbrest
+    depends_on:
+      db-dbrest:
+        condition: service_healthy
+    environment:
+      DBREST_DB_BACKEND:  "postgres"
+      DBREST_DB_URI:      "postgres://authenticator:authenticator_pass@db-dbrest:5432/postgres"
+      DBREST_DB_SCHEMAS:  "api, private"
+      DBREST_DB_ANON_ROLE: "web_anon"
+      DBREST_JWT_SECRET:  "reallyreallyreallyreallyverysafe"
+      DBREST_SERVER_PORT: "3001"
+    ports:
+      - "3001:3001"
+
+volumes:
+  dbrest-pg-data:

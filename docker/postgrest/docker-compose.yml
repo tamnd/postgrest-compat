@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       postgres
+    volumes:
+      - ../../testdata/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../../testdata/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  postgrest:
+    image: postgrest/postgrest:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI:          "postgres://postgres:postgres@db:5432/postgres"
+      PGRST_DB_SCHEMA:       "public"
+      PGRST_DB_ANON_ROLE:    "anon"
+      PGRST_JWT_SECRET:      "super-secret-jwt-token-with-at-least-32-characters"
+      PGRST_LOG_LEVEL:       "info"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

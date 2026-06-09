@@ -1,0 +1,15 @@
+server:
+  host: "0.0.0.0"
+  port: 3000
+
+db:
+  backend: postgres
+  uri: "postgres://postgres:postgres@db:5432/postgres"
+
+schema: public
+anon_role: anon
+jwt_secret: "super-secret-jwt-token-with-at-least-32-characters"
+
+expose:
+  - tables: ["*"]
+  - functions: ["get_status", "add", "get_user_count"]

@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-postgrest:
+    name: "test against PostgREST"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: start PostgREST stack
+        run: docker compose -f docker/postgrest/compose.yaml up -d
+
+      - name: wait for PostgREST
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+              echo "PostgREST is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "timeout waiting for PostgREST"
+          docker compose -f docker/postgrest/compose.yaml logs
+          exit 1
+
+      - name: run client tests
+        run: go test ./client/... -v -timeout 120s
+        env:
+          POSTGREST_URL: http://localhost:3000
+          JWT_SECRET: reallyreallyreallyreallyverysafe
+
+      - name: stop stack
+        if: always()
+        run: docker compose -f docker/postgrest/compose.yaml down -v
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: vet
+        run: go vet ./...

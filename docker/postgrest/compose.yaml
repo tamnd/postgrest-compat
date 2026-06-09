@@ -1,0 +1,46 @@
+# PostgREST v14 + PostgreSQL 18 reference stack.
+# Use this to run the client compat tests against real PostgREST.
+#
+#   docker compose -f docker/postgrest/compose.yaml up -d
+#
+# PostgREST listens on localhost:3000.
+# PostgreSQL listens on localhost:5433.
+
+services:
+  db-postgrest:
+    image: docker.io/library/postgres:18-alpine
+    container_name: compat-pg-postgrest
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgrest-pg-data:/var/lib/postgresql
+      - ../../testdata:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  postgrest:
+    image: docker.io/postgrest/postgrest:v14.13
+    container_name: compat-postgrest
+    depends_on:
+      db-postgrest:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI:                 "postgres://authenticator:authenticator_pass@db-postgrest:5432/postgres"
+      PGRST_DB_SCHEMAS:             "api, private"
+      PGRST_DB_ANON_ROLE:           "web_anon"
+      PGRST_JWT_SECRET:             "reallyreallyreallyreallyverysafe"
+      PGRST_OPENAPI_SERVER_PROXY_URI: "http://localhost:3000"
+      PGRST_SERVER_PORT:            "3000"
+      PGRST_LOG_LEVEL:              "info"
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgrest-pg-data:
