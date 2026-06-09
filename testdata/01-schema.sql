@@ -9,7 +9,7 @@ create schema if not exists api;
 create table api.todos (
     id   serial  primary key,
     done boolean not null default false,
-    task text    not null,
+    task text    not null unique,
     due  date,
     tags text[]  not null default '{}'
 );
