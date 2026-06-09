@@ -231,12 +231,14 @@ func TestS19_CSVOutput(t *testing.T) {
 	r.Status(200).ContentType("text/csv")
 }
 
-// S20: range header with offset + limit
+// S20: range header with offset + limit.
+// PostgREST returns 206 Partial Content when offset+limit+count=exact returns
+// fewer rows than the total; accept both 200 and 206.
 func TestS20_RangeOffset(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("select", "*", "offset", "0", "limit", "2"),
 		harness.H_("Prefer", "count=exact"))
-	r.Status(200).HasHeader("Content-Range")
+	r.StatusIn(200, 206).HasHeader("Content-Range")
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +413,8 @@ func TestP2_UpsertIgnore(t *testing.T) {
 		h.Delete("/todos", harness.P("task", "eq.test-p2-upsert"), nil)
 	})
 
-	r := h.Post("/todos", nil,
+	// PostgREST v14 requires on_conflict param to apply ON CONFLICT DO NOTHING.
+	r := h.Post("/todos", harness.P("on_conflict", "task"),
 		harness.H_("Prefer", "resolution=ignore-duplicates"),
 		map[string]any{"task": "test-p2-upsert", "done": true},
 	)
@@ -579,12 +582,14 @@ func TestE6_InvalidOperator(t *testing.T) {
 // Content negotiation
 // ---------------------------------------------------------------------------
 
-// CN1: geojson — Accept: application/geo+json (returns 406 if not supported)
+// CN1: geojson — Accept: application/geo+json.
+// Requires PostGIS; without it PostgreSQL raises 42883 (function not found).
+// PostgREST maps this to 404. Accept 200, 404, or 406.
 func TestCN1_GeoJSON(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("select", "*"),
 		harness.H_("Accept", "application/geo+json"))
-	r.StatusIn(200, 406) // 406 if server doesn't support GeoJSON
+	r.StatusIn(200, 404, 406)
 }
 
 // CN2: explain plan — Accept: application/vnd.pgrst.plan+json
@@ -837,8 +842,9 @@ func TestSS4_SchemaPost(t *testing.T) {
 		harness.H_("Content-Profile", "private"),
 		map[string]any{"name": "test-ss4-item"},
 	)
-	// private schema only has SELECT grant; expect 403 or 201 depending on server config
-	r.StatusIn(201, 403)
+	// private schema only has SELECT grant; PostgREST returns 401 for anon
+	// access to a resource requiring higher privileges (prompts client to auth).
+	r.StatusIn(201, 401, 403)
 	t.Cleanup(func() {
 		// attempt cleanup in case insert succeeded
 		h.Delete("/items",
