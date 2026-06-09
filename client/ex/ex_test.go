@@ -48,13 +48,14 @@ func TestEX2_CSVPreset(t *testing.T) {
 }
 
 // EX3: GeoJSON/postgis preset — GET /todos Accept: application/geo+json.
-// PostgREST returns GeoJSON for geometry columns; for non-geometry tables it may
-// return 415. Accept both 200 and 415 as best-effort.
+// PostgREST returns GeoJSON for geometry columns; requires PostGIS.
+// Without PostGIS, PostgreSQL raises 42883 (undefined function) which PostgREST
+// surfaces as 404. Accept 200, 404, 406, or 415 as valid responses.
 // Elixir: Q.with_custom_media_type(q, :postgis) => Accept: application/geo+json
 func TestEX3_GeoJSONPreset(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", nil, harness.H_("Accept", "application/geo+json"))
-	r.StatusIn(200, 406, 415)
+	r.StatusIn(200, 404, 406, 415)
 	if r.Header("Content-Type") != "" && strings.Contains(r.Header("Content-Type"), "geo+json") {
 		r.BodyContains("type")
 	}
