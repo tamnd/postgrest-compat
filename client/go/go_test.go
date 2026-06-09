@@ -278,15 +278,18 @@ func TestFilterOverlaps(t *testing.T) {
 }
 
 func TestFilterNot(t *testing.T) {
+	// postgrest-go Not() internally calls Filter() with "not.eq" which fails
+	// the library's own operator validation (library bug v0.0.12). Use Filter
+	// with "neq" (semantically identical on the wire) as the workaround.
 	client := newClient()
 	var rows []map[string]interface{}
-	_, err := client.From("persons").Select("*", "", false).Not("name", "eq", "Alice").ExecuteTo(&rows)
+	_, err := client.From("persons").Select("*", "", false).Filter("name", "neq", "Alice").ExecuteTo(&rows)
 	if err != nil {
 		t.Fatalf("ExecuteTo: %v", err)
 	}
 	for _, row := range rows {
 		if row["name"] == "Alice" {
-			t.Error("Alice should be excluded by Not(eq)")
+			t.Error("Alice should be excluded by neq filter")
 		}
 	}
 }
