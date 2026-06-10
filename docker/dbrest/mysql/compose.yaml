@@ -1,0 +1,23 @@
+# MySQL 8.4 only — used by CI to test against dbrest built from source.
+# dbrest is checked out and compiled as a host process; the container exposes
+# the standard MySQL port on 3306. The database `api` holds all compat tables.
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: compat-mysql-dbrest
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE:      api
+      MYSQL_USER:          dbrest
+      MYSQL_PASSWORD:      "Dbrest!Passw0rd"
+    ports:
+      - "3306:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dbrest", "-pDbrest!Passw0rd"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
