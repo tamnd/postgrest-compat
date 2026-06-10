@@ -1,0 +1,19 @@
+# SQL Server 2022 only — used by CI to test against dbrest built from source.
+# dbrest is checked out and compiled as a host process; this container exposes
+# the standard SQL Server port on 1433.
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: compat-mssql-dbrest
+    environment:
+      ACCEPT_EULA:          "Y"
+      MSSQL_SA_PASSWORD:    "Dbrest!Passw0rd1"
+      MSSQL_PID:            "Developer"
+    ports:
+      - "1433:1433"
+    healthcheck:
+      test: |
+        /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Dbrest!Passw0rd1' -Q 'SELECT 1' -C -b
+      interval: 10s
+      timeout: 10s
+      retries: 20

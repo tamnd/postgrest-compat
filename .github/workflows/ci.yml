@@ -286,6 +286,111 @@ jobs:
           kill "$(cat /tmp/dbrest-mysql.pid)" 2>/dev/null || true
           docker compose -f docker/dbrest/mysql/compose.yaml down -v
 
+  test-dbrest-sqlserver:
+    name: "test against dbrest+SQL Server"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: start SQL Server
+        run: docker compose -f docker/dbrest/sqlserver/compose.yaml up -d
+
+      - name: checkout dbrest
+        uses: actions/checkout@v4
+        with:
+          repository: tamnd/dbrest
+          ref: feat/sqlite-compat
+          path: dbrest-src
+
+      - name: build dbrest
+        run: go build -o /tmp/dbrest-sqlserver ./cmd/dbrest
+        working-directory: dbrest-src
+
+      - name: wait for SQL Server
+        run: |
+          for i in $(seq 1 40); do
+            if docker exec compat-mssql-dbrest /opt/mssql-tools18/bin/sqlcmd \
+               -S localhost -U sa -P 'Dbrest!Passw0rd1' -Q 'SELECT 1' -C -b > /dev/null 2>&1; then
+              echo "SQL Server is up"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "timeout waiting for SQL Server"
+          docker compose -f docker/dbrest/sqlserver/compose.yaml logs
+          exit 1
+
+      - name: create database and init schema
+        run: |
+          docker exec compat-mssql-dbrest /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'Dbrest!Passw0rd1' -C -b \
+            -Q "IF DB_ID('compat') IS NULL CREATE DATABASE compat"
+          docker exec -i compat-mssql-dbrest /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'Dbrest!Passw0rd1' -C -b -d compat \
+            -i /dev/stdin < docker/dbrest/sqlserver/schema.sql
+          docker exec -i compat-mssql-dbrest /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'Dbrest!Passw0rd1' -C -b -d compat \
+            -i /dev/stdin < docker/dbrest/sqlserver/seed.sql
+
+      - name: wait for full-text index population
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(docker exec compat-mssql-dbrest /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P 'Dbrest!Passw0rd1' -C -b -d compat \
+              -Q "SET NOCOUNT ON; SELECT crawl_type_desc FROM sys.fulltext_index_catalog_usages fi JOIN sys.fulltext_indexes i ON i.object_id=fi.fulltext_index_object_id WHERE OBJECT_NAME(i.object_id)='todos'" \
+              -h -1 2>&1 | tr -d ' \r\n')
+            if [ "$STATUS" = "AUTO" ] || [ "$STATUS" = "NONE" ]; then
+              echo "Full-text index ready (status=$STATUS)"
+              break
+            fi
+            echo "Waiting for FT index... ($i/20)"
+            sleep 2
+          done
+
+      - name: start dbrest
+        run: |
+          PGRST_DB_URI="sqlserver://sa:Dbrest\!Passw0rd1@127.0.0.1:1433?database=compat" \
+          PGRST_DB_SCHEMAS="dbo, private" \
+          PGRST_DB_ANON_ROLE=web_anon \
+          PGRST_JWT_SECRET=reallyreallyreallyreallyverysafe \
+          DBREST_DB_BACKEND=sqlserver \
+          DBREST_SERVER_PORT=3001 \
+          nohup /tmp/dbrest-sqlserver > /tmp/dbrest-sqlserver.log 2>&1 &
+          echo $! > /tmp/dbrest-sqlserver.pid
+
+      - name: wait for dbrest
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/ > /dev/null 2>&1; then
+              echo "dbrest-sqlserver is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "timeout waiting for dbrest-sqlserver"
+          cat /tmp/dbrest-sqlserver.log
+          exit 1
+
+      - name: run client tests
+        run: go test -p 1 ./client/... -v -timeout 180s
+        env:
+          POSTGREST_URL: http://localhost:3001
+          JWT_SECRET: reallyreallyreallyreallyverysafe
+
+      - name: show dbrest logs on failure
+        if: failure()
+        run: cat /tmp/dbrest-sqlserver.log || true
+
+      - name: stop stack
+        if: always()
+        run: |
+          kill "$(cat /tmp/dbrest-sqlserver.pid)" 2>/dev/null || true
+          docker compose -f docker/dbrest/sqlserver/compose.yaml down -v
+
   lint:
     name: lint
     runs-on: ubuntu-latest
