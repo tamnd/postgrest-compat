@@ -33,7 +33,7 @@ jobs:
           exit 1
 
       - name: run client tests
-        run: go test ./client/... -v -timeout 120s
+        run: go test -p 1 ./client/... -v -timeout 120s
         env:
           POSTGREST_URL: http://localhost:3000
           JWT_SECRET: reallyreallyreallyreallyverysafe
@@ -41,6 +41,83 @@ jobs:
       - name: stop stack
         if: always()
         run: docker compose -f docker/postgrest/compose.yaml down -v
+
+  test-dbrest:
+    name: "test against dbrest"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: start PostgreSQL
+        run: docker compose -f docker/dbrest/pg-only.yaml up -d
+
+      - name: checkout dbrest
+        uses: actions/checkout@v4
+        with:
+          repository: tamnd/dbrest
+          path: dbrest-src
+
+      - name: build dbrest
+        run: go build -o /tmp/dbrest ./cmd/dbrest
+        working-directory: dbrest-src
+
+      - name: wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec compat-pg-dbrest pg_isready -U postgres -d postgres > /dev/null 2>&1; then
+              echo "PostgreSQL is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "timeout waiting for PostgreSQL"
+          docker compose -f docker/dbrest/pg-only.yaml logs
+          exit 1
+
+      - name: start dbrest
+        run: |
+          nohup /tmp/dbrest > /tmp/dbrest.log 2>&1 &
+          echo $! > /tmp/dbrest.pid
+        env:
+          PGRST_DB_URI: "postgres://authenticator:authenticator_pass@localhost:5433/postgres"
+          PGRST_DB_SCHEMAS: "api, private"
+          PGRST_DB_ANON_ROLE: "web_anon"
+          PGRST_JWT_SECRET: "reallyreallyreallyreallyverysafe"
+          DBREST_DB_BACKEND: "postgres"
+          DBREST_SERVER_PORT: "3001"
+
+      - name: wait for dbrest
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/ > /dev/null 2>&1; then
+              echo "dbrest is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "timeout waiting for dbrest"
+          cat /tmp/dbrest.log
+          exit 1
+
+      - name: run client tests
+        run: go test -p 1 ./client/... -v -timeout 180s
+        env:
+          POSTGREST_URL: http://localhost:3001
+          JWT_SECRET: reallyreallyreallyreallyverysafe
+
+      - name: show dbrest logs on failure
+        if: failure()
+        run: cat /tmp/dbrest.log || true
+
+      - name: stop stack
+        if: always()
+        run: |
+          kill "$(cat /tmp/dbrest.pid)" 2>/dev/null || true
+          docker compose -f docker/dbrest/pg-only.yaml down -v
 
   lint:
     name: lint
