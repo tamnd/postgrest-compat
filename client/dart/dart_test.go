@@ -35,23 +35,26 @@ func TestDA1_CountExact(t *testing.T) {
 }
 
 // DA2: FetchOptions count=planned => Prefer: count=planned, Content-Range present
+// count=planned uses EXPLAIN; 206 is expected when the estimate exceeds
+// actual rows (e.g., fresh table with stale statistics before ANALYZE).
 func TestDA2_CountPlanned(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos",
 		nil,
 		harness.H_("Prefer", "count=planned"),
 	)
-	r.Status(200).HasHeader("Content-Range")
+	r.StatusIn(200, 206).HasHeader("Content-Range")
 }
 
 // DA3: FetchOptions count=estimated => Prefer: count=estimated, Content-Range present
+// Same as DA2: accept both 200 and 206.
 func TestDA3_CountEstimated(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos",
 		nil,
 		harness.H_("Prefer", "count=estimated"),
 	)
-	r.Status(200).HasHeader("Content-Range")
+	r.StatusIn(200, 206).HasHeader("Content-Range")
 }
 
 // DA4: FetchOptions head=true => HEAD request, empty body, Content-Range present
