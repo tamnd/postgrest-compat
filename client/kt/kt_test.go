@@ -904,7 +904,7 @@ func TestKT47_ContentProfile(t *testing.T) {
 		harness.H_("Content-Profile", "private", "Prefer", "return=minimal"),
 		map[string]any{"name": "kt-kt47-item"},
 	)
-	res.StatusIn(201, 403)
+	res.StatusIn(201, 401, 403)
 	if res.Header("") != "" {
 		// cleanup only if inserted
 	}

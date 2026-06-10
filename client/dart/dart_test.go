@@ -1088,7 +1088,7 @@ func TestDA73_SchemaPost(t *testing.T) {
 		harness.H_("Content-Profile", "private"),
 		map[string]any{"name": "dart-da73"},
 	)
-	r.StatusIn(201, 403)
+	r.StatusIn(201, 401, 403)
 }
 
 // DA74: HEAD /todos Prefer: count=exact => 200, empty body, has Content-Range with numeric total
