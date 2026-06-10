@@ -959,19 +959,22 @@ func TestER4_EmbeddedOrFilter(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // CT1: planned count
+// count=planned uses EXPLAIN for the estimate; 206 is expected when the
+// estimate exceeds actual rows (e.g., fresh table with stale statistics).
 func TestCT1_CountPlanned(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("select", "*"),
 		harness.H_("Prefer", "count=planned"))
-	r.Status(200)
+	r.StatusIn(200, 206)
 }
 
 // CT2: estimated count
+// Same as CT1: 206 is valid when the estimate is higher than actual rows.
 func TestCT2_CountEstimated(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("select", "*"),
 		harness.H_("Prefer", "count=estimated"))
-	r.Status(200)
+	r.StatusIn(200, 206)
 }
 
 // ---------------------------------------------------------------------------
