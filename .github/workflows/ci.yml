@@ -33,7 +33,7 @@ jobs:
           exit 1
 
       - name: run client tests
-        run: go test ./client/... -v -timeout 120s
+        run: go test -p 1 ./client/... -v -timeout 120s
         env:
           POSTGREST_URL: http://localhost:3000
           JWT_SECRET: reallyreallyreallyreallyverysafe
