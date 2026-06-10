@@ -773,3 +773,422 @@ func TestRS_PhFts(t *testing.T) {
 	res.Status(200)
 }
 
+func TestRS_SLStrictlyLeft(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "sl.{z}"), nil)
+	res.StatusIn(200, 400, 404)
+}
+
+func TestRS_SRStrictlyRight(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "sr.{a}"), nil)
+	res.StatusIn(200, 400, 404)
+}
+
+func TestRS_NXLNotExtendLeft(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "nxl.{a}"), nil)
+	res.StatusIn(200, 400, 404)
+}
+
+func TestRS_NXRNotExtendRight(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "nxr.{z}"), nil)
+	res.StatusIn(200, 400, 404)
+}
+
+func TestRS_FTSWithConfig(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "fts(english).tutorial"), nil)
+	res.Status(200)
+}
+
+func TestRS_PLFTSWithConfig(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "plfts(english).tutorial"), nil)
+	res.Status(200)
+}
+
+func TestRS_PhFTSWithConfig(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "phfts(english).tutorial"), nil)
+	res.Status(200)
+}
+
+func TestRS_WFTSWithConfig(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "wfts(english).tutorial"), nil)
+	res.Status(200)
+}
+
+func TestRS_IsTrue(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("done", "is.true"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	for i, row := range arr {
+		done, ok := row["done"].(bool)
+		if !ok || !done {
+			t.Errorf("row[%d] done=%v, expected true", i, row["done"])
+		}
+	}
+}
+
+func TestRS_NotLike(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "not.like.finish%"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	for i, row := range arr {
+		task, ok := row["task"].(string)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(task, "finish") {
+			t.Errorf("row[%d] task %q starts with 'finish' but not.like.finish%% should exclude it", i, task)
+		}
+	}
+}
+
+func TestRS_AndFilter(t *testing.T) {
+	h := harness.New(t)
+	params := url.Values{}
+	params.Set("and", "(done.eq.false,id.gt.0)")
+	res := h.Get("/todos", params, nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one row for and=(done.eq.false,id.gt.0)")
+	}
+}
+
+func TestRS_OrWithNot(t *testing.T) {
+	h := harness.New(t)
+	params := url.Values{}
+	params.Set("or", "(not.done.eq.true,id.eq.1)")
+	res := h.Get("/todos", params, nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one row for or=(not.done.eq.true,id.eq.1)")
+	}
+}
+
+func TestRS_UpsertIgnoreDuplicates(t *testing.T) {
+	h := harness.New(t)
+
+	h.Post("/todos", nil, nil, map[string]any{"task": "rs-upsert-ignore-unique"})
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-upsert-ignore-unique"), nil)
+	})
+
+	res := h.Post("/todos",
+		harness.P("on_conflict", "task"),
+		harness.H_("Prefer", "resolution=ignore-duplicates"),
+		map[string]any{"task": "rs-upsert-ignore-unique"},
+	)
+	res.StatusIn(200, 201)
+}
+
+func TestRS_ReturnHeadersOnly(t *testing.T) {
+	h := harness.New(t)
+
+	res := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=headers-only"),
+		map[string]any{"task": "rs-headers-only"},
+	)
+	res.Status(201)
+	res.HasHeader("Location")
+
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-headers-only"), nil)
+	})
+}
+
+func TestRS_ReturnMinimal(t *testing.T) {
+	h := harness.New(t)
+
+	res := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=minimal"),
+		map[string]any{"task": "rs-minimal"},
+	)
+	res.Status(201)
+
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-minimal"), nil)
+	})
+}
+
+func TestRS_CountPlanned(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Prefer", "count=planned"))
+	res.StatusIn(200, 206)
+	res.HasHeader("Content-Range")
+}
+
+func TestRS_CountEstimated(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Prefer", "count=estimated"))
+	res.StatusIn(200, 206)
+	res.HasHeader("Content-Range")
+}
+
+func TestRS_TxRollback(t *testing.T) {
+	h := harness.New(t)
+
+	const task = "rs-tx-rollback-unique-9f3a"
+
+	res := h.Post("/todos", nil,
+		harness.H_("Prefer", "tx=rollback,return=representation"),
+		map[string]any{"task": task},
+	)
+	res.StatusIn(200, 201, 204)
+
+	check := h.Get("/todos", harness.P("task", "eq."+task), nil)
+	check.Status(200)
+	check.ArrayLen(0)
+}
+
+func TestRS_MissingDefault(t *testing.T) {
+	h := harness.New(t)
+
+	res := h.Post("/todos", nil,
+		harness.H_("Prefer", "missing=default"),
+		map[string]any{"task": "rs-missing-default"},
+	)
+	res.Status(201)
+
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-missing-default"), nil)
+	})
+}
+
+func TestRS_RPCGet(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/rpc/get_todos_count", nil, nil)
+	res.Status(200)
+}
+
+func TestRS_RPCGetWithParams(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/rpc/add", harness.P("a", "1", "b", "2"), nil)
+	res.Status(200)
+	res.BodyContains("3")
+}
+
+func TestRS_ContentProfileWrite(t *testing.T) {
+	h := harness.New(t)
+
+	t.Cleanup(func() {
+		h.Delete("/items",
+			harness.P("name", "eq.rs-schema-write"),
+			harness.H_("Accept-Profile", "private"),
+		)
+	})
+
+	res := h.Post("/items", nil,
+		harness.H_("Content-Profile", "private"),
+		map[string]any{"name": "rs-schema-write"},
+	)
+	res.StatusIn(201, 403)
+}
+
+func TestRS_EmbeddedResource(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/messages", harness.P("select", "id,message,persons(name)"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	for i, row := range arr {
+		if _, ok := row["persons"]; !ok {
+			t.Errorf("row[%d] missing 'persons' embedded field", i)
+		}
+	}
+}
+
+func TestRS_NestedEmbed(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/messages", harness.P("select", "id,message,channels(id,slug)"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	for i, row := range arr {
+		if _, ok := row["channels"]; !ok {
+			t.Errorf("row[%d] missing 'channels' embedded field", i)
+		}
+	}
+}
+
+func TestRS_EmbedWithFilter(t *testing.T) {
+	h := harness.New(t)
+	params := harness.P("select", "id,persons(name)")
+	params.Set("persons.name", "eq.Alice")
+	res := h.Get("/messages", params, nil)
+	res.Status(200)
+}
+
+func TestRS_SelectAlias(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("select", "taskName:task,isDone:done"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	for i, row := range arr {
+		if _, ok := row["taskName"]; !ok {
+			t.Errorf("row[%d] missing aliased field 'taskName'", i)
+		}
+		if _, ok := row["isDone"]; !ok {
+			t.Errorf("row[%d] missing aliased field 'isDone'", i)
+		}
+	}
+}
+
+func TestRS_OrderNullsFirst(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("order", "due.asc.nullsfirst"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	if arr[0]["due"] != nil {
+		t.Errorf("first row should have due=null with nullsfirst, got due=%v", arr[0]["due"])
+	}
+}
+
+func TestRS_OrderNullsLast(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("order", "due.asc.nullslast"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	if arr[len(arr)-1]["due"] != nil {
+		t.Errorf("last row should have due=null with nullslast, got due=%v", arr[len(arr)-1]["due"])
+	}
+}
+
+func TestRS_Range(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("offset", "0", "limit", "2"), nil)
+	res.Status(200)
+	res.ArrayLen(2)
+}
+
+func TestRS_DeleteWithRepresentation(t *testing.T) {
+	h := harness.New(t)
+
+	h.Post("/todos", nil, nil, map[string]any{"task": "rs-delete-repr"})
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-delete-repr"), nil)
+	})
+
+	res := h.Delete("/todos",
+		harness.P("task", "eq.rs-delete-repr"),
+		harness.H_("Prefer", "return=representation"),
+	)
+	res.Status(200)
+
+	body := res.RawBody()
+	if len(body) == 0 {
+		t.Error("expected non-empty body when Prefer: return=representation on DELETE")
+	}
+}
+
+func TestRS_UpdateWithRepresentation(t *testing.T) {
+	h := harness.New(t)
+
+	h.Post("/todos", nil, nil, map[string]any{"task": "rs-update-repr", "done": false})
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.rs-update-repr"), nil)
+	})
+
+	res := h.Patch("/todos",
+		harness.P("task", "eq.rs-update-repr"),
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"done": true},
+	)
+	res.Status(200)
+
+	body := res.RawBody()
+	if len(body) == 0 {
+		t.Error("expected non-empty body when Prefer: return=representation on PATCH")
+	}
+}
+
+func TestRS_InFilterStrings(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "in.(finish tutorial,pat the cat)"), nil)
+	res.Status(200)
+	res.ArrayLen(2)
+}
+
+func TestRS_MultipleFilters(t *testing.T) {
+	h := harness.New(t)
+	params := harness.P("done", "eq.false", "id", "gt.1")
+	res := h.Get("/todos", params, nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	for i, row := range arr {
+		done, _ := row["done"].(bool)
+		id, _ := row["id"].(float64)
+		if done {
+			t.Errorf("row[%d] done=true, expected false", i)
+		}
+		if id <= 1 {
+			t.Errorf("row[%d] id=%v, expected >1", i, id)
+		}
+	}
+}
+
+func TestRS_RPCSetof(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post("/rpc/get_person_by_name", nil, nil, map[string]any{"name_param": "Alice"})
+	res.Status(200)
+
+	arr := res.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one result for name_param=Alice")
+	}
+	found := false
+	for _, row := range arr {
+		if name, ok := row["name"].(string); ok && name == "Alice" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected result to contain Alice")
+	}
+}
+
+func TestRS_IsFalse(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("done", "is.false"), nil)
+	res.Status(200)
+
+	arr := res.JSONArray()
+	for i, row := range arr {
+		done, ok := row["done"].(bool)
+		if !ok || done {
+			t.Errorf("row[%d] done=%v, expected false", i, row["done"])
+		}
+	}
+}
