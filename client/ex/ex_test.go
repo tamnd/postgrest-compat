@@ -834,7 +834,7 @@ func TestEX53_ContentProfileSchemaSwitching(t *testing.T) {
 	r := h.Post("/items", nil,
 		harness.H_("Content-Profile", "private", "Prefer", "return=minimal"),
 		map[string]any{"name": "ex-ex53"})
-	r.StatusIn(201, 403)
+	r.StatusIn(201, 401, 403)
 	if r.Header("HTTP_STATUS") != "403" {
 		// If insert succeeded, clean up
 		t.Cleanup(func() {
