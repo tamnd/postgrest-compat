@@ -758,6 +758,9 @@ func TestEX46_UpdateReturningRepresentation(t *testing.T) {
 // EX47: update returning minimal — PATCH /todos?id=eq.1 Prefer: return=minimal => 200 or 204.
 func TestEX47_UpdateReturningMinimal(t *testing.T) {
 	h := harness.New(t)
+	t.Cleanup(func() {
+		h.Patch("/todos", harness.P("id", "eq.1"), nil, map[string]any{"done": true})
+	})
 	r := h.Patch("/todos", harness.P("id", "eq.1"),
 		harness.H_("Prefer", "return=minimal"),
 		map[string]any{"done": false})
