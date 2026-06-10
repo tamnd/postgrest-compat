@@ -59,6 +59,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tamnd/dbrest
+          ref: fix/postgrest-compat-401
           path: dbrest-src
 
       - name: build dbrest
@@ -77,6 +78,19 @@ jobs:
           echo "timeout waiting for PostgreSQL"
           docker compose -f docker/dbrest/pg-only.yaml logs
           exit 1
+
+      - name: verify db permissions
+        run: |
+          echo "=== roles ==="
+          docker exec compat-pg-dbrest psql -U postgres -d postgres -c "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('authenticator','web_anon','web_user') ORDER BY rolname;"
+          echo "=== member of ==="
+          docker exec compat-pg-dbrest psql -U postgres -d postgres -c "SELECT r.rolname member, g.rolname grantee FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member JOIN pg_roles g ON g.oid=m.roleid WHERE r.rolname='authenticator';"
+          echo "=== has_table_privilege ==="
+          docker exec compat-pg-dbrest psql -U postgres -d postgres -c "SELECT has_table_privilege('web_anon','api.todos','SELECT') AS can_select;"
+          echo "=== set local role test ==="
+          docker exec compat-pg-dbrest psql -U postgres -d postgres -c "BEGIN; SET LOCAL ROLE web_anon; SELECT count(*) FROM api.todos; ROLLBACK;"
+          echo "=== as authenticator (simulate dbrest pool) ==="
+          docker exec compat-pg-dbrest psql -U authenticator -d postgres -c "BEGIN TRANSACTION READ ONLY; SET LOCAL ROLE web_anon; SELECT count(*) FROM api.todos; ROLLBACK;"
 
       - name: start dbrest
         run: |
