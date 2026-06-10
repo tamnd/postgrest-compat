@@ -1,0 +1,21 @@
+# PostgreSQL 18 only — used by CI to test against dbrest built from source.
+# dbrest is checked out and compiled as a host process so we test the binary
+# directly without a Docker layer.  Port 5433 avoids clashing with the
+# PostgREST stack on 5432.
+services:
+  db-dbrest:
+    image: docker.io/library/postgres:18-alpine
+    container_name: compat-pg-dbrest
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ../../testdata:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15

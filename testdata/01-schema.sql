@@ -94,10 +94,11 @@ create table private.items (
 -- (production would keep anon read-only; we open writes so both servers
 -- return identical 201/204 on write test cases without a JWT secret)
 
-grant usage on schema api to web_anon, web_user;
+grant usage on schema api     to authenticator, web_anon, web_user;
+grant usage on schema private to authenticator, web_anon, web_user;
+
 grant select, insert, update, delete on all tables in schema api to web_anon, web_user;
 grant usage, select on all sequences in schema api to web_anon, web_user;
 
-grant usage  on schema private to web_anon, web_user;
 grant select on private.items  to web_anon, web_user;
 grant usage, select on all sequences in schema private to web_anon, web_user;

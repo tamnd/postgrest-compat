@@ -41,7 +41,9 @@ type H struct {
 // New creates a new H for the given test.
 func New(t *testing.T) *H {
 	t.Helper()
-	return &H{t: t, base: ServerURL(), client: &http.Client{}}
+	return &H{t: t, base: ServerURL(), client: &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}}
 }
 
 // Req sends a request and returns a Result.
