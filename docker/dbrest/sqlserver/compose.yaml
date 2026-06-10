@@ -3,7 +3,9 @@
 # the standard SQL Server port on 1433.
 services:
   sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: compat-mssql-dbrest
     environment:
       ACCEPT_EULA:          "Y"
