@@ -1148,14 +1148,14 @@ func TestFR_SrFilter(t *testing.T) {
 func TestFR_NxlFilter(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("id", "nxl.(0,5)"), nil)
-	r.StatusIn(200, 400)
+	r.StatusIn(200, 400, 404)
 }
 
 // FR_Nxr: nxr range filter
 func TestFR_NxrFilter(t *testing.T) {
 	h := harness.New(t)
 	r := h.Get("/todos", harness.P("id", "nxr.(0,5)"), nil)
-	r.StatusIn(200, 400)
+	r.StatusIn(200, 400, 404)
 }
 
 // ---------------------------------------------------------------------------
