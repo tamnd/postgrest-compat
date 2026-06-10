@@ -56,3 +56,6 @@ INSERT OR IGNORE INTO movies (name, tags, release_date) VALUES
 INSERT OR REPLACE INTO items (id, name) VALUES
     (1, 'item one'),
     (2, 'item two');
+
+-- Populate the FTS5 external-content index from the current todos rows.
+INSERT INTO todos_fts(todos_fts) VALUES('rebuild');

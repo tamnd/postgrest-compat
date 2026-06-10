@@ -243,6 +243,16 @@ func (r *Result) ArrayLen(n int) *Result {
 	return r
 }
 
+// ArrayLenAtLeast asserts the JSON array body has at least n elements.
+func (r *Result) ArrayLenAtLeast(n int) *Result {
+	r.t.Helper()
+	arr := r.JSONArray()
+	if len(arr) < n {
+		r.t.Errorf("array length: got %d, want >= %d", len(arr), n)
+	}
+	return r
+}
+
 // RowsHaveField asserts every row in the JSON array contains the given key.
 func (r *Result) RowsHaveField(key string) *Result {
 	r.t.Helper()

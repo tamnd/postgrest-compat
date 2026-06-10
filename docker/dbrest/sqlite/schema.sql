@@ -73,3 +73,6 @@ CREATE TABLE IF NOT EXISTS items (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT    NOT NULL
 );
+
+-- FTS5 external-content index backing all full-text search tests on todos.task
+CREATE VIRTUAL TABLE IF NOT EXISTS todos_fts USING fts5(task, content=todos, content_rowid=id);
