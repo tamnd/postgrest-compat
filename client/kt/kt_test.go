@@ -4,9 +4,13 @@
 package kt_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/tamnd/postgrest-compat/harness"
@@ -440,3 +444,592 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// makeAnonJWT builds a signed HS256 JWT with role=web_anon.
+func makeAnonJWT() string {
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	pay := base64.RawURLEncoding.EncodeToString([]byte(`{"role":"web_anon"}`))
+	msg := hdr + "." + pay
+	mac := hmac.New(sha256.New, []byte(harness.JWTSecret()))
+	mac.Write([]byte(msg))
+	return msg + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// KT19: Filter gte.
+// GET /persons?age=gte.30 => all rows with age >= 30
+func TestKT19_FilterGte(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("age", "gte.30"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one person with age >= 30")
+	}
+	for i, row := range rows {
+		age, ok := row["age"]
+		if !ok {
+			t.Errorf("row[%d] missing 'age'", i)
+			continue
+		}
+		if age.(float64) < 30 {
+			t.Errorf("row[%d] age %v should be >= 30", i, age)
+		}
+	}
+}
+
+// KT20: Filter lt.
+// GET /persons?age=lt.30 => all rows with age < 30
+func TestKT20_FilterLt(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("age", "lt.30"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one person with age < 30")
+	}
+	for i, row := range rows {
+		age, ok := row["age"]
+		if !ok {
+			t.Errorf("row[%d] missing 'age'", i)
+			continue
+		}
+		if age.(float64) >= 30 {
+			t.Errorf("row[%d] age %v should be < 30", i, age)
+		}
+	}
+}
+
+// KT21: Filter ilike (case-insensitive).
+// GET /todos?task=ilike.*LAUNDRY* => at least 1 row
+func TestKT21_FilterIlike(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "ilike.*LAUNDRY*"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one result matching LAUNDRY (case-insensitive)")
+	}
+}
+
+// KT22: Filter is null.
+// GET /todos?due=is.null => only rows where due is null
+func TestKT22_FilterIsNull(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("due", "is.null"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one todo with null due (id=2)")
+	}
+	for i, row := range rows {
+		if row["due"] != nil {
+			t.Errorf("row[%d] due should be null, got %v", i, row["due"])
+		}
+	}
+}
+
+// KT23: Filter not.
+// GET /todos?done=not.eq.true => all rows where done is false
+func TestKT23_FilterNot(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("done", "not.eq.true"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one todo with done=false")
+	}
+	for i, row := range rows {
+		if row["done"] == true {
+			t.Errorf("row[%d] done should not be true", i)
+		}
+	}
+}
+
+// KT24: Order ascending.
+// GET /persons?order=age.asc => rows in ascending age order
+func TestKT24_OrderAsc(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("order", "age.asc"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	var prev float64 = -1
+	for i, row := range rows {
+		age, ok := row["age"]
+		if !ok {
+			t.Errorf("row[%d] missing 'age'", i)
+			continue
+		}
+		a := age.(float64)
+		if a < prev {
+			t.Errorf("row[%d] age %v is less than previous %v (not ascending)", i, a, prev)
+		}
+		prev = a
+	}
+}
+
+// KT25: Order descending.
+// GET /persons?order=age.desc => rows in descending age order
+func TestKT25_OrderDesc(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("order", "age.desc"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	var prev float64 = 1<<53 - 1
+	for i, row := range rows {
+		age, ok := row["age"]
+		if !ok {
+			t.Errorf("row[%d] missing 'age'", i)
+			continue
+		}
+		a := age.(float64)
+		if a > prev {
+			t.Errorf("row[%d] age %v is greater than previous %v (not descending)", i, a, prev)
+		}
+		prev = a
+	}
+}
+
+// KT26: Order nulls first.
+// GET /todos?order=due.asc.nullsfirst => first row has due=null
+func TestKT26_OrderNullsFirst(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("order", "due.asc.nullsfirst"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	if rows[0]["due"] != nil {
+		t.Errorf("first row due should be null (nullsfirst), got %v", rows[0]["due"])
+	}
+}
+
+// KT27: Limit.
+// GET /persons?limit=1 => exactly 1 row
+func TestKT27_Limit(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("limit", "1"), nil)
+	res.Status(200)
+	res.ArrayLen(1)
+}
+
+// KT28: Offset.
+// GET /persons?order=id.asc&offset=1 => does not include id=1
+func TestKT28_Offset(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("order", "id.asc", "offset", "1"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	for i, row := range rows {
+		if row["id"].(float64) == 1 {
+			t.Errorf("row[%d] id=1 should have been skipped by offset=1", i)
+		}
+	}
+}
+
+// KT29: Limit + offset.
+// GET /persons?order=id.asc&limit=1&offset=1 => exactly 1 row
+func TestKT29_LimitOffset(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("order", "id.asc", "limit", "1", "offset", "1"), nil)
+	res.Status(200)
+	res.ArrayLen(1)
+}
+
+// KT30: Range header.
+// GET /persons Range: 0-1 => 200 or 206, at most 2 rows
+func TestKT30_RangeHeader(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", nil, harness.H_("Range", "0-1"))
+	res.StatusIn(200, 206)
+	rows := res.JSONArray()
+	if len(rows) > 2 {
+		t.Errorf("expected at most 2 rows with Range: 0-1, got %d", len(rows))
+	}
+}
+
+// KT31: Count exact.
+// GET /todos Prefer: count=exact => Content-Range total = 3
+func TestKT31_CountExact(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Prefer", "count=exact"))
+	res.Status(200)
+	res.HasHeader("Content-Range")
+	cr := res.Header("Content-Range")
+	if total := harness.ContentRangeTotal(cr); total != 3 {
+		t.Errorf("Content-Range total: got %d, want 3 (cr=%q)", total, cr)
+	}
+}
+
+// KT32: Count planned.
+// GET /todos Prefer: count=planned => 200 or 206, has Content-Range
+func TestKT32_CountPlanned(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Prefer", "count=planned"))
+	res.StatusIn(200, 206)
+	res.HasHeader("Content-Range")
+}
+
+// KT33: Count estimated.
+// GET /todos Prefer: count=estimated => 200 or 206, has Content-Range
+func TestKT33_CountEstimated(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Prefer", "count=estimated"))
+	res.StatusIn(200, 206)
+	res.HasHeader("Content-Range")
+}
+
+// KT34: HEAD count exact.
+// HEAD /todos Prefer: count=exact => 200, has Content-Range, empty body
+func TestKT34_HeadCount(t *testing.T) {
+	h := harness.New(t)
+	res := h.Head("/todos", nil, harness.H_("Prefer", "count=exact"))
+	res.Status(200)
+	res.HasHeader("Content-Range")
+	res.EmptyBody()
+}
+
+// KT35: Insert return=minimal.
+// POST /todos Prefer: return=minimal => 201, no body
+func TestKT35_InsertReturnMinimal(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post("/todos", nil, harness.H_("Prefer", "return=minimal"), map[string]any{"task": "kt-kt35-minimal"})
+	res.Status(201)
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.kt-kt35-minimal"), nil)
+	})
+}
+
+// KT36: Insert return=headers-only.
+// POST /todos Prefer: return=headers-only => 201, has Location header
+func TestKT36_InsertReturnHeadersOnly(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post("/todos", nil, harness.H_("Prefer", "return=headers-only"), map[string]any{"task": "kt-kt36-headersonly"})
+	res.Status(201)
+	res.HasHeader("Location")
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.kt-kt36-headersonly"), nil)
+	})
+}
+
+// KT37: Upsert.
+// POST /todos?on_conflict=task Prefer: resolution=merge-duplicates,return=representation => 200 or 201
+func TestKT37_Upsert(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post(
+		"/todos",
+		harness.P("on_conflict", "task"),
+		harness.H_("Prefer", "resolution=merge-duplicates,return=representation"),
+		map[string]any{"task": "kt-kt37-upsert", "done": false},
+	)
+	res.StatusIn(200, 201)
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.kt-kt37-upsert"), nil)
+	})
+}
+
+// KT38: Update return=representation.
+// Insert a row, PATCH Prefer: return=representation => 200, non-empty array
+func TestKT38_UpdateReturnRepresentation(t *testing.T) {
+	h := harness.New(t)
+	ins := h.Post("/todos", nil, harness.H_("Prefer", "return=representation"), map[string]any{"task": "kt-kt38-update"})
+	ins.Status(201)
+	rows := ins.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("insert returned no rows")
+	}
+	id := rows[0]["id"].(float64)
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("id", fmt.Sprintf("eq.%d", int64(id))), nil)
+	})
+
+	res := h.Patch(
+		"/todos",
+		harness.P("id", fmt.Sprintf("eq.%d", int64(id))),
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"done": true},
+	)
+	res.Status(200)
+	updated := res.JSONArray()
+	if len(updated) == 0 {
+		t.Error("expected non-empty array in PATCH response")
+	}
+}
+
+// KT39: Delete return=representation.
+// Insert a row, DELETE Prefer: return=representation => 200, non-empty body
+func TestKT39_DeleteReturnRepresentation(t *testing.T) {
+	h := harness.New(t)
+	ins := h.Post("/todos", nil, harness.H_("Prefer", "return=representation"), map[string]any{"task": "kt-kt39-delete"})
+	ins.Status(201)
+	rows := ins.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("insert returned no rows")
+	}
+	id := rows[0]["id"].(float64)
+
+	res := h.Delete(
+		"/todos",
+		harness.P("id", fmt.Sprintf("eq.%d", int64(id))),
+		harness.H_("Prefer", "return=representation"),
+	)
+	res.Status(200)
+	deleted := res.JSONArray()
+	if len(deleted) == 0 {
+		t.Error("expected non-empty body in DELETE response")
+	}
+}
+
+// KT40: Select column alias.
+// GET /messages?select=msgId:id,message => rows have "msgId" key
+func TestKT40_SelectColumnAlias(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/messages", harness.P("select", "msgId:id,message"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one message")
+	}
+	for i, row := range rows {
+		if _, ok := row["msgId"]; !ok {
+			t.Errorf("row[%d] missing aliased field 'msgId'", i)
+		}
+		if _, ok := row["id"]; ok {
+			t.Errorf("row[%d] should not have original 'id' when aliased to 'msgId'", i)
+		}
+	}
+}
+
+// KT41: Select specific columns only.
+// GET /persons?select=id,name => rows have id+name, no age
+func TestKT41_SelectColumns(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("select", "id,name"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one person")
+	}
+	for i, row := range rows {
+		if _, ok := row["id"]; !ok {
+			t.Errorf("row[%d] missing 'id'", i)
+		}
+		if _, ok := row["name"]; !ok {
+			t.Errorf("row[%d] missing 'name'", i)
+		}
+		if _, ok := row["age"]; ok {
+			t.Errorf("row[%d] should not have 'age' when not selected", i)
+		}
+	}
+}
+
+// KT42: And filter.
+// GET /persons?and=(age.gte.25,age.lte.30) => 25 <= age <= 30
+func TestKT42_AndFilter(t *testing.T) {
+	h := harness.New(t)
+	params := url.Values{}
+	params.Set("and", "(age.gte.25,age.lte.30)")
+	res := h.Get("/persons", params, nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one person with 25 <= age <= 30")
+	}
+	for i, row := range rows {
+		age, ok := row["age"]
+		if !ok {
+			t.Errorf("row[%d] missing 'age'", i)
+			continue
+		}
+		a := age.(float64)
+		if a < 25 || a > 30 {
+			t.Errorf("row[%d] age %v should be between 25 and 30", i, a)
+		}
+	}
+}
+
+// KT43: Or filter on embedded resource.
+// GET /channels?select=id,messages(id,message)&messages.or=(channel_id.eq.1,channel_id.eq.2) => 200
+func TestKT43_OrFilterEmbedded(t *testing.T) {
+	h := harness.New(t)
+	params := url.Values{}
+	params.Set("select", "id,messages(id,message)")
+	params.Set("messages.or", "(channel_id.eq.1,channel_id.eq.2)")
+	res := h.Get("/channels", params, nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one channel")
+	}
+}
+
+// KT44: RPC GET.
+// GET /rpc/get_todos_count => 200
+func TestKT44_RpcGet(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/rpc/get_todos_count", nil, nil)
+	res.Status(200)
+}
+
+// KT45: RPC POST with count=exact.
+// POST /rpc/get_todos_count Prefer: count=exact body={} => 200
+func TestKT45_RpcCount(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post("/rpc/get_todos_count", nil, harness.H_("Prefer", "count=exact"), map[string]any{})
+	res.Status(200)
+}
+
+// KT46: JWT auth.
+// GET /todos Authorization: Bearer <valid jwt role=web_anon> => 200
+func TestKT46_JwtAuth(t *testing.T) {
+	h := harness.New(t)
+	token := makeAnonJWT()
+	res := h.Get("/todos", nil, harness.H_("Authorization", "Bearer "+token))
+	res.Status(200)
+}
+
+// KT47: Content-Profile header for schema routing.
+// POST /items Content-Profile: private Prefer: return=minimal => 201 or 403
+func TestKT47_ContentProfile(t *testing.T) {
+	h := harness.New(t)
+	res := h.Post(
+		"/items",
+		nil,
+		harness.H_("Content-Profile", "private", "Prefer", "return=minimal"),
+		map[string]any{"name": "kt-kt47-item"},
+	)
+	res.StatusIn(201, 403)
+	if res.Header("") != "" {
+		// cleanup only if inserted
+	}
+	t.Cleanup(func() {
+		h.Delete("/items", harness.P("name", "eq.kt-kt47-item"), harness.H_("Accept-Profile", "private"))
+	})
+}
+
+// KT48: Filter plfts (plain full text search).
+// GET /todos?task=plfts.tutorial => 200
+func TestKT48_FilterPlfts(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "plfts.tutorial"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one result from plfts.tutorial")
+	}
+}
+
+// KT49: Filter phfts (phrase full text search).
+// GET /todos?task=phfts.finish tutorial => 200
+func TestKT49_FilterPhfts(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "phfts.finish tutorial"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one result from phfts.finish tutorial")
+	}
+}
+
+// KT50: Filter wfts (websearch full text search).
+// GET /todos?task=wfts.tutorial => 200
+func TestKT50_FilterWfts(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("task", "wfts.tutorial"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one result from wfts.tutorial")
+	}
+}
+
+// KT51: Filter cs (contains).
+// GET /todos?tags=cs.{go} => at least 1 row (id=1 has go in tags)
+func TestKT51_FilterCs(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "cs.{go}"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row with tags containing 'go'")
+	}
+}
+
+// KT52: Filter cd (contained by).
+// GET /todos?tags=cd.{go,sql,pets,chores,home} => 200
+func TestKT52_FilterCd(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "cd.{go,sql,pets,chores,home}"), nil)
+	res.Status(200)
+}
+
+// KT53: Filter ov (overlap).
+// GET /todos?tags=ov.{go,pets} => id=1 (go) and id=2 (pets) match
+func TestKT53_FilterOv(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("tags", "ov.{go,pets}"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) < 2 {
+		t.Fatalf("expected at least 2 rows (id=1 go, id=2 pets), got %d", len(rows))
+	}
+}
+
+// KT54: CSV output.
+// GET /todos Accept: text/csv => 200, Content-Type: text/csv
+func TestKT54_CsvOutput(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Accept", "text/csv"))
+	res.Status(200)
+	res.ContentType("text/csv")
+}
+
+// KT55: Maybe-single no rows => 406.
+// GET /todos?id=eq.9999 Accept: application/vnd.pgrst.object+json => 406
+func TestKT55_MaybeSingleNoRows(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("id", "eq.9999"),
+		harness.H_("Accept", "application/vnd.pgrst.object+json"))
+	res.Status(406)
+}
+
+// KT56: Single with multiple rows => 406.
+// GET /todos Accept: application/vnd.pgrst.object+json (no id filter) => 406
+func TestKT56_SingleMultipleRows406(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", nil, harness.H_("Accept", "application/vnd.pgrst.object+json"))
+	res.Status(406)
+}
+
+// KT57: Filter on column that might not exist (email).
+// GET /persons?email=eq.alice@example.com => 200
+func TestKT57_FilterGeneric(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/persons", harness.P("email", "eq.alice@example.com"), nil)
+	res.Status(200)
+}
+
+// KT58: Order nulls last.
+// GET /todos?order=due.asc.nullslast => last row has due=null
+func TestKT58_OrderNullsLast(t *testing.T) {
+	h := harness.New(t)
+	res := h.Get("/todos", harness.P("order", "due.asc.nullslast"), nil)
+	res.Status(200)
+	rows := res.JSONArray()
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	last := rows[len(rows)-1]
+	if last["due"] != nil {
+		t.Errorf("last row due should be null (nullslast), got %v", last["due"])
+	}
+}
+
+// _ is a compile-time check that the strings import is used.
+var _ = strings.Contains
