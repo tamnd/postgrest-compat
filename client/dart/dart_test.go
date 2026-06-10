@@ -956,6 +956,11 @@ func TestDA60_UpdateCount(t *testing.T) {
 // DA61: PATCH /todos Prefer: return=minimal body={"done":false} => StatusIn(200,204,400)
 func TestDA61_UpdateNoFilter(t *testing.T) {
 	h := harness.New(t)
+	// Restore seed done values in cleanup so later packages see consistent state.
+	t.Cleanup(func() {
+		h.Patch("/todos", harness.P("id", "eq.1"), nil, map[string]any{"done": true})
+		h.Patch("/todos", harness.P("id", "eq.2"), nil, map[string]any{"done": true})
+	})
 	r := h.Patch("/todos", nil,
 		harness.H_("Prefer", "return=minimal"),
 		map[string]any{"done": false},
