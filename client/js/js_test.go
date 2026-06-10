@@ -11,12 +11,25 @@
 package js_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/tamnd/postgrest-compat/harness"
 )
+
+// makeAnonJWT builds a minimal HS256 JWT with role=web_anon.
+func makeAnonJWT() string {
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	pay := base64.RawURLEncoding.EncodeToString([]byte(`{"role":"web_anon"}`))
+	msg := hdr + "." + pay
+	mac := hmac.New(sha256.New, []byte(harness.JWTSecret()))
+	mac.Write([]byte(msg))
+	return msg + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
 
 // ---------------------------------------------------------------------------
 // SELECT scenarios
@@ -1044,6 +1057,315 @@ func TestWS2_SelectEmpty(t *testing.T) {
 		if _, ok := arr[0][col]; !ok {
 			t.Errorf("row[0] missing column %q in select=*", col)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Filter operator coverage (continued)
+// ---------------------------------------------------------------------------
+
+// F26: is.true filter
+func TestF26_IsTrue(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*", "done", "is.true"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if row["done"] != true {
+			t.Errorf("row[%d] done=%v, want true", i, row["done"])
+		}
+	}
+}
+
+// F27: is.false filter
+func TestF27_IsFalse(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*", "done", "is.false"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if row["done"] != false {
+			t.Errorf("row[%d] done=%v, want false", i, row["done"])
+		}
+	}
+}
+
+// F29: not.in filter
+func TestF29_NotIn(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*", "id", "not.in.(1,2)"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		id := toFloat64(row["id"])
+		if id == 1 || id == 2 {
+			t.Errorf("row[%d] id=%v, should not be 1 or 2", i, id)
+		}
+	}
+}
+
+// F30: not.eq filter
+func TestF30_NotEq(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*", "id", "not.eq.1"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if toFloat64(row["id"]) == 1 {
+			t.Errorf("row[%d] id=1 should be excluded by not.eq.1", i)
+		}
+	}
+}
+
+// F31: not.is.null filter
+func TestF31_NotIsNull(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*", "due", "not.is.null"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if row["due"] == nil {
+			t.Errorf("row[%d] due=null, should be excluded by not.is.null", i)
+		}
+	}
+}
+
+// FR_Sl: sl range filter
+func TestFR_SlFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "sl.(5,10)"), nil)
+	r.StatusIn(200, 400)
+}
+
+// FR_Sr: sr range filter
+func TestFR_SrFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "sr.(0,0)"), nil)
+	r.StatusIn(200, 400)
+}
+
+// FR_Nxl: nxl range filter
+func TestFR_NxlFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "nxl.(0,5)"), nil)
+	r.StatusIn(200, 400, 404)
+}
+
+// FR_Nxr: nxr range filter
+func TestFR_NxrFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "nxr.(0,5)"), nil)
+	r.StatusIn(200, 400, 404)
+}
+
+// ---------------------------------------------------------------------------
+// Select expression coverage
+// ---------------------------------------------------------------------------
+
+// SEL2: inner join embed
+func TestSEL2_InnerJoinEmbed(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/messages", harness.P("select", "id,message,persons!inner(name)"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if _, ok := row["persons"]; !ok {
+			t.Errorf("row[%d] missing embedded 'persons'", i)
+		}
+	}
+}
+
+// SEL3: spread embed syntax
+func TestSEL3_SpreadEmbed(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/messages", harness.P("select", "id,...persons(name)"), nil)
+	r.StatusIn(200, 400) // server may not support spread syntax
+}
+
+// SEL4: embed count
+func TestSEL4_EmbedCount(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/channels", harness.P("select", "id,messages(count)"), nil)
+	r.Status(200)
+	_ = r.JSONArray()
+}
+
+// SEL5: column alias
+func TestSEL5_ColumnAlias(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "task_text:task"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if _, ok := row["task_text"]; !ok {
+			t.Errorf("row[%d] missing aliased key 'task_text'", i)
+		}
+	}
+}
+
+// SEL6: column cast to text
+func TestSEL6_ColumnCast(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "id,done::text"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if v, ok := row["done"]; ok {
+			if _, isString := v.(string); !isString {
+				t.Errorf("row[%d] done cast to text: expected string, got %T (%v)", i, v, v)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MaybeSingle POST
+// ---------------------------------------------------------------------------
+
+// MS1: POST with Accept: application/vnd.pgrst.object+json
+func TestMS1_MaybeSinglePost(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos",
+		harness.P("select", "id,task"),
+		harness.H_("Prefer", "return=representation", "Accept", "application/vnd.pgrst.object+json"),
+		map[string]any{"task": "js-ms1-maybesingle", "done": false},
+	)
+	r.StatusIn(200, 201)
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.js-ms1-maybesingle"), nil)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Auth / JWT
+// ---------------------------------------------------------------------------
+
+// AU1: valid JWT bearer (role=web_anon) — should succeed as anon
+func TestAU1_JWTBearerAnon(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*"),
+		harness.H_("Authorization", "Bearer "+makeAnonJWT()))
+	r.Status(200)
+}
+
+// AU2: invalid JWT bearer — server may reject (401) or treat as anon (200)
+func TestAU2_JWTBearerInvalid(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "*"),
+		harness.H_("Authorization", "Bearer invalidtoken.notvalid.atall"))
+	r.StatusIn(200, 401)
+}
+
+// ---------------------------------------------------------------------------
+// Error scenarios (continued)
+// ---------------------------------------------------------------------------
+
+// E3: unique constraint violation
+func TestE3_UniqueConstraintViolation(t *testing.T) {
+	h := harness.New(t)
+	// "finish tutorial" is the seed task for id=1; inserting again hits unique constraint
+	r := h.Post("/todos", nil, nil, map[string]any{"task": "finish tutorial", "done": false})
+	r.StatusIn(400, 409)
+}
+
+// E4: FK constraint violation
+func TestE4_FKConstraintViolation(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/messages", nil, nil, map[string]any{
+		"message":    "test-e4-fk",
+		"channel_id": 99999,
+		"person_id":  1,
+	})
+	r.StatusIn(400, 409, 422)
+}
+
+// E7: table not found
+func TestE7_TableNotFound(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/nonexistent_table_xyz", nil, nil)
+	r.Status(404)
+}
+
+// E8: rpc not found
+func TestE8_RpcNotFound(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/rpc/nonexistent_func_xyz", nil, nil, map[string]any{})
+	r.Status(404)
+}
+
+// ---------------------------------------------------------------------------
+// Count header (continued)
+// ---------------------------------------------------------------------------
+
+// CT3: HEAD with count=exact
+func TestCT3_CountHead(t *testing.T) {
+	h := harness.New(t)
+	r := h.Head("/todos", nil, harness.H_("Prefer", "count=exact"))
+	r.Status(200).HasHeader("Content-Range")
+	if len(r.RawBody()) != 0 {
+		t.Errorf("HEAD must have empty body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Embedded resource with filter
+// ---------------------------------------------------------------------------
+
+// FR3: embed with filter on embedded side
+func TestFR3_EmbedWithFilter(t *testing.T) {
+	h := harness.New(t)
+	params := url.Values{}
+	params.Set("select", "id,persons(name)")
+	params.Set("persons.name", "eq.Alice")
+	r := h.Get("/messages", params, nil)
+	r.Status(200)
+	_ = r.JSONArray()
+}
+
+// ---------------------------------------------------------------------------
+// Transaction rollback
+// ---------------------------------------------------------------------------
+
+// TX1: insert with tx=rollback, row must not persist
+func TestTX1_TxRollback(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos",
+		harness.P("select", "id,task"),
+		harness.H_("Prefer", "tx=rollback,return=representation"),
+		map[string]any{"task": "js-tx1-rollback-xz9m", "done": false},
+	)
+	r.StatusIn(200, 201)
+	// Row must not be persisted
+	check := h.Get("/todos", harness.P("task", "eq.js-tx1-rollback-xz9m"), nil)
+	check.Status(200).ArrayLen(0)
+}
+
+// ---------------------------------------------------------------------------
+// RPC (continued)
+// ---------------------------------------------------------------------------
+
+// RPC1: GET /rpc/get_todos_count (stable function via GET)
+func TestRPC1_RpcGetStable(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/rpc/get_todos_count", nil, nil)
+	r.Status(200)
+}
+
+// RPC2: POST /rpc/get_person_by_name?select=name
+func TestRPC2_RpcWithSelect(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/rpc/get_person_by_name",
+		harness.P("select", "name"),
+		nil,
+		map[string]any{"name_param": "Alice"},
+	)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Errorf("expected at least 1 row from get_person_by_name")
+	}
+	if _, ok := arr[0]["name"]; !ok {
+		t.Errorf("row missing 'name' field from select=name")
 	}
 }
 

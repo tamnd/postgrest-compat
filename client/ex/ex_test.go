@@ -14,6 +14,9 @@
 package ex_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -421,4 +424,568 @@ func TestEX21_GeoJSONResponseStructure(t *testing.T) {
 // itoa converts an int to string for use in query params.
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// makeAnonJWT builds a signed HS256 JWT with role=web_anon.
+func makeAnonJWT() string {
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	pay := base64.RawURLEncoding.EncodeToString([]byte(`{"role":"web_anon"}`))
+	msg := hdr + "." + pay
+	mac := hmac.New(sha256.New, []byte(harness.JWTSecret()))
+	mac.Write([]byte(msg))
+	return msg + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// EX22: eq filter — GET /todos?id=eq.2 => 200, 1 row with id=2.
+func TestEX22_EqFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "eq.2"), nil)
+	r.Status(200).ArrayLen(1)
+	arr := r.JSONArray()
+	if id, ok := arr[0]["id"].(float64); !ok || id != 2 {
+		t.Errorf("expected id=2, got: %v", arr[0]["id"])
+	}
+}
+
+// EX23: neq filter — GET /todos?id=neq.1 => 200, no row with id=1.
+func TestEX23_NeqFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "neq.1"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for _, row := range arr {
+		if id, ok := row["id"].(float64); ok && id == 1 {
+			t.Errorf("neq.1 filter returned row with id=1")
+		}
+	}
+}
+
+// EX24: gt filter — GET /todos?id=gt.1 => 200, all id>1.
+func TestEX24_GtFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "gt.1"), nil)
+	r.Status(200)
+	r.RowsAllMatch("id>1", func(row map[string]any) bool {
+		id, ok := row["id"].(float64)
+		return ok && id > 1
+	})
+}
+
+// EX25: gte filter — GET /todos?id=gte.2 => 200, all id>=2.
+func TestEX25_GteFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "gte.2"), nil)
+	r.Status(200)
+	r.RowsAllMatch("id>=2", func(row map[string]any) bool {
+		id, ok := row["id"].(float64)
+		return ok && id >= 2
+	})
+}
+
+// EX26: lt filter — GET /todos?id=lt.3 => 200, all id<3.
+func TestEX26_LtFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "lt.3"), nil)
+	r.Status(200)
+	r.RowsAllMatch("id<3", func(row map[string]any) bool {
+		id, ok := row["id"].(float64)
+		return ok && id < 3
+	})
+}
+
+// EX27: lte filter — GET /todos?id=lte.2 => 200, all id<=2.
+func TestEX27_LteFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "lte.2"), nil)
+	r.Status(200)
+	r.RowsAllMatch("id<=2", func(row map[string]any) bool {
+		id, ok := row["id"].(float64)
+		return ok && id <= 2
+	})
+}
+
+// EX28: like filter — GET /todos?task=like.*cat* => 200, rows matching *cat*.
+// PostgREST uses * as wildcard for the like operator.
+func TestEX28_LikeFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("task", "like.*cat*"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	found := false
+	for _, row := range arr {
+		if task, ok := row["task"].(string); ok && strings.Contains(task, "cat") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("like.*cat* should match 'pat the cat', got: %v", arr)
+	}
+}
+
+// EX29: ilike filter — GET /todos?task=ilike.*CAT* => 200, case-insensitive match.
+func TestEX29_IlikeFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("task", "ilike.*CAT*"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	found := false
+	for _, row := range arr {
+		if task, ok := row["task"].(string); ok && strings.Contains(strings.ToLower(task), "cat") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ilike.*CAT* should match 'pat the cat', got: %v", arr)
+	}
+}
+
+// EX30: is.null filter — GET /todos?due=is.null => 200, all due=null.
+func TestEX30_IsNullFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("due", "is.null"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one row with due=null (id=2)")
+	}
+	r.RowsAllMatch("due=null", func(row map[string]any) bool {
+		return row["due"] == nil
+	})
+}
+
+// EX31: in filter — GET /todos?id=in.(1,2) => 200, exactly 2 rows.
+func TestEX31_InFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "in.(1,2)"), nil)
+	r.Status(200).ArrayLen(2)
+}
+
+// EX32: cs (contains) filter — GET /todos?tags=cs.{go} => 200, at least 1 row.
+func TestEX32_ContainsFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("tags", "cs.{go}"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one row with tags containing 'go'")
+	}
+}
+
+// EX33: cd (contained by) filter — GET /todos?tags=cd.{go,sql,pets,chores,home} => 200.
+func TestEX33_ContainedByFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("tags", "cd.{go,sql,pets,chores,home}"), nil)
+	r.Status(200)
+}
+
+// EX34: ov (overlaps) filter — GET /todos?tags=ov.{go,pets} => 200.
+func TestEX34_OverlapsFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("tags", "ov.{go,pets}"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one row with tags overlapping {go,pets}")
+	}
+}
+
+// EX35: fts text search — GET /todos?task=fts.tutorial => 200, rows contain "tutorial".
+func TestEX35_FtsTextSearch(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("task", "fts.tutorial"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	found := false
+	for _, row := range arr {
+		if task, ok := row["task"].(string); ok && strings.Contains(task, "tutorial") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("fts.tutorial should match 'finish tutorial', got: %v", arr)
+	}
+}
+
+// EX36: not.in filter — GET /todos?id=not.in.(1,2) => 200, only id=3 returned.
+func TestEX36_NotInFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "not.in.(1,2)"), nil)
+	r.Status(200)
+	r.RowsAllMatch("id not in (1,2)", func(row map[string]any) bool {
+		id, ok := row["id"].(float64)
+		return ok && id != 1 && id != 2
+	})
+}
+
+// EX37: raw eq filter on string column — GET /persons?name=eq.Alice => 200, 1 row Alice.
+func TestEX37_RawFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/persons", harness.P("name", "eq.Alice"), nil)
+	r.Status(200).ArrayLen(1)
+	arr := r.JSONArray()
+	if name, ok := arr[0]["name"].(string); !ok || name != "Alice" {
+		t.Errorf("expected name=Alice, got: %v", arr[0]["name"])
+	}
+}
+
+// EX38: limit — GET /todos?limit=2 => 200, exactly 2 rows.
+func TestEX38_Limit(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("limit", "2"), nil)
+	r.Status(200).ArrayLen(2)
+}
+
+// EX39: offset — GET /todos?order=id.asc&offset=1 => 200, no id=1.
+func TestEX39_Offset(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("order", "id.asc", "offset", "1"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for _, row := range arr {
+		if id, ok := row["id"].(float64); ok && id == 1 {
+			t.Errorf("offset=1 should skip id=1, but it appeared in results")
+		}
+	}
+}
+
+// EX40: range via offset+limit — GET /todos?offset=0&limit=2 => 200, exactly 2 rows.
+func TestEX40_Range(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("offset", "0", "limit", "2"), nil)
+	r.Status(200).ArrayLen(2)
+}
+
+// EX41: order desc — GET /todos?order=id.desc => 200, rows in descending id order.
+func TestEX41_OrderDesc(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("order", "id.desc"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) < 2 {
+		t.Fatal("expected at least 2 rows")
+	}
+	for i := 1; i < len(arr); i++ {
+		prev, _ := arr[i-1]["id"].(float64)
+		cur, _ := arr[i]["id"].(float64)
+		if cur >= prev {
+			t.Errorf("row[%d].id=%v >= row[%d].id=%v, not descending", i, cur, i-1, prev)
+		}
+	}
+}
+
+// EX42: order desc nullsfirst — GET /todos?order=due.desc.nullsfirst => first row due=null.
+func TestEX42_OrderDescNullsFirst(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("order", "due.desc.nullsfirst"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	if arr[0]["due"] != nil {
+		t.Errorf("nullsfirst: first row should have due=null, got: %v", arr[0]["due"])
+	}
+}
+
+// EX43: select specific columns — GET /todos?select=id,task => rows have id+task only, no done.
+func TestEX43_SelectSpecificColumns(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "id,task"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected rows")
+	}
+	for i, row := range arr {
+		if _, ok := row["id"]; !ok {
+			t.Errorf("row[%d] missing 'id'", i)
+		}
+		if _, ok := row["task"]; !ok {
+			t.Errorf("row[%d] missing 'task'", i)
+		}
+		if _, ok := row["done"]; ok {
+			t.Errorf("row[%d] should not have 'done' when not selected", i)
+		}
+	}
+}
+
+// EX44: single semantics — GET /todos?id=eq.1 Accept: application/vnd.pgrst.object+json => JSON object.
+func TestEX44_SingleSemantics(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "eq.1"),
+		harness.H_("Accept", "application/vnd.pgrst.object+json"))
+	r.Status(200)
+	obj := r.JSONObject()
+	if _, ok := obj["id"]; !ok {
+		t.Errorf("expected JSON object with 'id', got: %v", obj)
+	}
+}
+
+// EX45: maybe-single — GET /todos?id=eq.99999 Accept: application/vnd.pgrst.object+json => 200 or 406.
+func TestEX45_MaybeSingle(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("id", "eq.99999"),
+		harness.H_("Accept", "application/vnd.pgrst.object+json"))
+	r.StatusIn(200, 406)
+}
+
+// EX46: update returning representation — PATCH /todos?id=eq.N Prefer: return=representation => 200, non-empty.
+func TestEX46_UpdateReturningRepresentation(t *testing.T) {
+	h := harness.New(t)
+	ins := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"task": "ex-ex46-update", "done": false})
+	ins.Status(201)
+	arr := ins.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("insert failed")
+	}
+	id := int(arr[0]["id"].(float64))
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("id", "eq."+itoa(id)), nil)
+	})
+
+	r := h.Patch("/todos", harness.P("id", "eq."+itoa(id)),
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"done": true})
+	r.Status(200)
+	body := r.RawBody()
+	if len(strings.TrimSpace(string(body))) == 0 {
+		t.Error("expected non-empty body for return=representation")
+	}
+}
+
+// EX47: update returning minimal — PATCH /todos?id=eq.1 Prefer: return=minimal => 200 or 204.
+func TestEX47_UpdateReturningMinimal(t *testing.T) {
+	h := harness.New(t)
+	t.Cleanup(func() {
+		h.Patch("/todos", harness.P("id", "eq.1"), nil, map[string]any{"done": true})
+	})
+	r := h.Patch("/todos", harness.P("id", "eq.1"),
+		harness.H_("Prefer", "return=minimal"),
+		map[string]any{"done": false})
+	r.StatusIn(200, 204)
+}
+
+// EX48: upsert merge-duplicates — POST /todos?on_conflict=task Prefer: resolution=merge-duplicates => 200 or 201.
+func TestEX48_UpsertMergeDuplicates(t *testing.T) {
+	h := harness.New(t)
+	task := "ex-ex48-upsert-z9m1"
+	// Insert first so the upsert has something to merge against.
+	ins := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"task": task, "done": false})
+	ins.StatusIn(200, 201)
+	insArr := ins.JSONArray()
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq."+task), nil)
+	})
+	_ = insArr
+
+	r := h.Post("/todos", harness.P("on_conflict", "task"),
+		harness.H_("Prefer", "resolution=merge-duplicates,return=representation"),
+		map[string]any{"task": task, "done": true})
+	r.StatusIn(200, 201)
+}
+
+// EX49: upsert ignore-duplicates — POST /todos?on_conflict=task Prefer: resolution=ignore-duplicates => 200 or 201.
+func TestEX49_UpsertIgnoreDuplicates(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos", harness.P("on_conflict", "task"),
+		harness.H_("Prefer", "resolution=ignore-duplicates,return=representation"),
+		map[string]any{"task": "finish tutorial"})
+	r.StatusIn(200, 201)
+}
+
+// EX50: insert count=exact — POST /todos Prefer: return=representation,count=exact => 200 or 201, Content-Range.
+func TestEX50_InsertCountExact(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=representation,count=exact"),
+		map[string]any{"task": "ex-ex50-count", "done": false})
+	r.StatusIn(200, 201)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected returned row")
+	}
+	id := int(arr[0]["id"].(float64))
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("id", "eq."+itoa(id)), nil)
+	})
+	r.HasHeader("Content-Range")
+}
+
+// EX51: count=planned — GET /todos Prefer: count=planned => 200 or 206, Content-Range.
+func TestEX51_CountPlanned(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", nil, harness.H_("Prefer", "count=planned"))
+	r.StatusIn(200, 206)
+	r.HasHeader("Content-Range")
+}
+
+// EX52: count=estimated — GET /todos Prefer: count=estimated => 200 or 206, Content-Range.
+func TestEX52_CountEstimated(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", nil, harness.H_("Prefer", "count=estimated"))
+	r.StatusIn(200, 206)
+	r.HasHeader("Content-Range")
+}
+
+// EX53: Content-Profile schema switching on write — POST /items Content-Profile: private => 201 or 403.
+func TestEX53_ContentProfileSchemaSwitching(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/items", nil,
+		harness.H_("Content-Profile", "private", "Prefer", "return=minimal"),
+		map[string]any{"name": "ex-ex53"})
+	r.StatusIn(201, 401, 403)
+	if r.Header("HTTP_STATUS") != "403" {
+		// If insert succeeded, clean up
+		t.Cleanup(func() {
+			h.Delete("/items", harness.P("name", "eq.ex-ex53"),
+				harness.H_("Content-Profile", "private"))
+		})
+	}
+}
+
+// EX54: RPC stable function GET — GET /rpc/get_todos_count => 200.
+func TestEX54_RpcStableFunctionGet(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/rpc/get_todos_count", nil, nil)
+	r.Status(200)
+}
+
+// EX55: RPC volatile function POST — POST /rpc/add body={"a":5,"b":3} => 200, body contains "8".
+func TestEX55_RpcVolatileFunctionPost(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/rpc/add", nil, nil, map[string]any{"a": 5, "b": 3})
+	r.Status(200).BodyContains("8")
+}
+
+// EX56: RPC returning setof — POST /rpc/get_person_by_name body={"name_param":"Alice"} => 200, array with Alice.
+func TestEX56_RpcReturningSetof(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/rpc/get_person_by_name", nil, nil, map[string]any{"name_param": "Alice"})
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected at least one row for Alice")
+	}
+	found := false
+	for _, row := range arr {
+		if name, ok := row["name"].(string); ok && name == "Alice" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Alice in result, got: %v", arr)
+	}
+}
+
+// EX57: multi-step pipeline — GET /todos?done=eq.false&order=id.asc&limit=2 => at most 2 rows, all done=false.
+func TestEX57_MultiStepPipeline(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("done", "eq.false", "order", "id.asc", "limit", "2"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) > 2 {
+		t.Errorf("limit=2 but got %d rows", len(arr))
+	}
+	for i, row := range arr {
+		if row["done"] != false {
+			t.Errorf("row[%d] done=%v, want false", i, row["done"])
+		}
+	}
+}
+
+// EX58: embedded resource select — GET /messages?select=id,message,persons(name) => rows have "persons" field.
+func TestEX58_EmbeddedResourceSelect(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/messages", harness.P("select", "id,message,persons(name)"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("expected message rows")
+	}
+	for i, row := range arr {
+		if _, ok := row["persons"]; !ok {
+			t.Errorf("row[%d] missing embedded 'persons' field", i)
+		}
+	}
+}
+
+// EX59: auth bearer token — GET /todos Authorization: Bearer <valid jwt> => 200.
+func TestEX59_AuthBearerToken(t *testing.T) {
+	h := harness.New(t)
+	token := makeAnonJWT()
+	r := h.Get("/todos", nil, harness.H_("Authorization", "Bearer "+token))
+	r.Status(200)
+}
+
+// EX60: delete returning representation — DELETE /todos?id=eq.N Prefer: return=representation => 200, non-empty.
+func TestEX60_DeleteReturningRepresentation(t *testing.T) {
+	h := harness.New(t)
+	ins := h.Post("/todos", nil,
+		harness.H_("Prefer", "return=representation"),
+		map[string]any{"task": "ex-ex60-delete", "done": false})
+	ins.Status(201)
+	arr := ins.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("insert failed")
+	}
+	id := int(arr[0]["id"].(float64))
+	t.Cleanup(func() {
+		// best-effort cleanup in case delete test itself failed
+		h.Delete("/todos", harness.P("id", "eq."+itoa(id)), nil)
+	})
+
+	r := h.Delete("/todos", harness.P("id", "eq."+itoa(id)),
+		harness.H_("Prefer", "return=representation"))
+	r.Status(200)
+	body := r.RawBody()
+	s := strings.TrimSpace(string(body))
+	if s == "" || s == "[]" {
+		t.Error("expected non-empty body for delete return=representation")
+	}
+}
+
+// EX61: is.true filter — GET /todos?done=is.true => 200, all done=true.
+func TestEX61_IsTrueFilter(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("done", "is.true"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected at least one done=true row (id=1)")
+	}
+	r.RowsAllMatch("done=true", func(row map[string]any) bool {
+		return row["done"] == true
+	})
+}
+
+// EX62: order multiple columns — GET /todos?order=done.asc,id.desc => 200.
+func TestEX62_OrderMultipleColumns(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("order", "done.asc,id.desc"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) == 0 {
+		t.Error("expected rows")
+	}
+	// Verify ordering: done=false rows come before done=true rows,
+	// and within same done value, id is descending.
+	for i := 1; i < len(arr); i++ {
+		prevDone := arr[i-1]["done"]
+		curDone := arr[i]["done"]
+		// done=false < done=true; if prev=true and cur=false, ordering violated
+		if prevDone == true && curDone == false {
+			t.Errorf("row[%d] done=false after row[%d] done=true (order=done.asc violated)", i, i-1)
+		}
+		if prevDone == curDone {
+			prevID, _ := arr[i-1]["id"].(float64)
+			curID, _ := arr[i]["id"].(float64)
+			if curID >= prevID {
+				t.Errorf("row[%d].id=%v >= row[%d].id=%v within same done group (order=id.desc violated)", i, curID, i-1, prevID)
+			}
+		}
+	}
 }

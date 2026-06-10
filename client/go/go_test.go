@@ -12,6 +12,9 @@
 package go_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -20,6 +23,16 @@ import (
 
 	"github.com/tamnd/postgrest-compat/harness"
 )
+
+// makeAnonJWT builds a minimal HS256 JWT with role=web_anon.
+func makeAnonJWT() string {
+	hdr := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	pay := base64.RawURLEncoding.EncodeToString([]byte(`{"role":"web_anon"}`))
+	msg := hdr + "." + pay
+	mac := hmac.New(sha256.New, []byte(harness.JWTSecret()))
+	mac.Write([]byte(msg))
+	return msg + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
 
 // newClient returns a postgrest-go client pointed at the test server.
 // Schema "api" maps to the root path (no /api/ prefix in URLs).
@@ -855,6 +868,256 @@ func TestEmbedCitiesWithCountries(t *testing.T) {
 	h := harness.New(t)
 	h.Get("/cities", harness.P("select", "id,name,countries(id,name)"), nil).
 		Status(200)
+}
+
+// ---------------------------------------------------------------------------
+// Filter operator coverage (continued)
+// ---------------------------------------------------------------------------
+
+func TestFilterAnd(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/todos", harness.P("and", "(done.eq.false,id.gt.0)"), nil).
+		Status(200)
+}
+
+func TestFilterIsTrue(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("done", "is.true"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if row["done"] != true {
+			t.Errorf("row[%d] done=%v, want true", i, row["done"])
+		}
+	}
+}
+
+func TestFilterIsFalse(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("done", "is.false"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if row["done"] != false {
+			t.Errorf("row[%d] done=%v, want false", i, row["done"])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ORDER with nulls
+// ---------------------------------------------------------------------------
+
+func TestOrderNullsFirst(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "id,due", "order", "due.asc.nullsfirst"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) > 0 {
+		// First row should have due=null
+		if arr[0]["due"] != nil {
+			t.Errorf("first row due=%v, want null with nullsfirst", arr[0]["due"])
+		}
+	}
+}
+
+func TestOrderNullsLast(t *testing.T) {
+	h := harness.New(t)
+	r := h.Get("/todos", harness.P("select", "id,due", "order", "due.asc.nullslast"), nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	if len(arr) > 0 {
+		// Last row should have due=null
+		last := arr[len(arr)-1]
+		if last["due"] != nil {
+			t.Errorf("last row due=%v, want null with nullslast", last["due"])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Count header
+// ---------------------------------------------------------------------------
+
+func TestSelectCountPlanned(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/todos", harness.P("select", "*"), harness.H_("Prefer", "count=planned")).
+		StatusIn(200, 206).
+		HasHeader("Content-Range")
+}
+
+func TestSelectCountEstimated(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/todos", harness.P("select", "*"), harness.H_("Prefer", "count=estimated")).
+		StatusIn(200, 206).
+		HasHeader("Content-Range")
+}
+
+func TestSelectCountHead(t *testing.T) {
+	h := harness.New(t)
+	r := h.Head("/todos", nil, harness.H_("Prefer", "count=exact"))
+	r.Status(200).HasHeader("Content-Range")
+	if len(r.RawBody()) != 0 {
+		t.Errorf("HEAD must have empty body")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auth / JWT
+// ---------------------------------------------------------------------------
+
+func TestSetAuthTokenHeader(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/todos", harness.P("select", "*"),
+		harness.H_("Authorization", "Bearer "+makeAnonJWT())).
+		Status(200)
+}
+
+// ---------------------------------------------------------------------------
+// Foreign table / embedded filters
+// ---------------------------------------------------------------------------
+
+func TestForeignTableOrder(t *testing.T) {
+	h := harness.New(t)
+	params := harness.P("select", "id,messages(id,message)")
+	params.Set("messages.order", "id.asc")
+	h.Get("/channels", params, nil).Status(200)
+}
+
+func TestForeignTableLimit(t *testing.T) {
+	h := harness.New(t)
+	params := harness.P("select", "id,messages(id,message)")
+	params.Set("messages.limit", "1")
+	r := h.Get("/channels", params, nil)
+	r.Status(200)
+	arr := r.JSONArray()
+	for i, row := range arr {
+		if msgs, ok := row["messages"]; ok {
+			if msgArr, ok := msgs.([]any); ok && len(msgArr) > 1 {
+				t.Errorf("row[%d] has %d embedded messages, want <=1", i, len(msgArr))
+			}
+		}
+	}
+}
+
+func TestForeignTableRange(t *testing.T) {
+	h := harness.New(t)
+	params := harness.P("select", "id,messages(id,message)")
+	params.Set("messages.offset", "0")
+	params.Set("messages.limit", "2")
+	h.Get("/channels", params, nil).Status(200)
+}
+
+func TestForeignTableOr(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/messages", harness.P("select", "id", "or", "(channel_id.eq.1,channel_id.eq.2)"), nil).
+		Status(200)
+}
+
+func TestEmbedDirection(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/todos", harness.P("select", "id,assignments(id,person_id)"), nil).
+		Status(200)
+}
+
+// ---------------------------------------------------------------------------
+// Upsert on conflict
+// ---------------------------------------------------------------------------
+
+func TestInsertUpsertOnConflict(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos",
+		harness.P("on_conflict", "task"),
+		harness.H_("Prefer", "resolution=merge-duplicates"),
+		map[string]interface{}{"task": "go-upsert-onconflict", "done": false},
+	)
+	r.StatusIn(200, 201)
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.go-upsert-onconflict"), nil)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Insert / update / delete with count
+// ---------------------------------------------------------------------------
+
+func TestInsertCountExact(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos",
+		harness.P("select", "id,task"),
+		harness.H_("Prefer", "return=representation,count=exact"),
+		map[string]interface{}{"task": "go-insert-count", "done": false},
+	)
+	r.StatusIn(200, 201).HasHeader("Content-Range")
+	t.Cleanup(func() {
+		h.Delete("/todos", harness.P("task", "eq.go-insert-count"), nil)
+	})
+}
+
+func TestUpdateCount(t *testing.T) {
+	h := harness.New(t)
+	r := h.Patch("/todos",
+		harness.P("id", "eq.1"),
+		harness.H_("Prefer", "count=exact"),
+		map[string]interface{}{"done": false},
+	)
+	r.StatusIn(200, 204).HasHeader("Content-Range")
+}
+
+func TestDeleteCount(t *testing.T) {
+	h := harness.New(t)
+	// Insert a row to delete
+	ins := h.Post("/todos", nil, harness.H_("Prefer", "return=representation"),
+		map[string]interface{}{"task": "go-delete-count", "done": false})
+	ins.StatusIn(200, 201)
+	arr := ins.JSONArray()
+	if len(arr) == 0 {
+		t.Fatal("insert failed")
+	}
+	idStr := jsonNumberToString(arr[0]["id"])
+
+	r := h.Delete("/todos",
+		harness.P("id", "eq."+idStr),
+		harness.H_("Prefer", "count=exact"),
+	)
+	r.StatusIn(200, 204).HasHeader("Content-Range")
+}
+
+// ---------------------------------------------------------------------------
+// RPC with count
+// ---------------------------------------------------------------------------
+
+func TestRpcWithCount(t *testing.T) {
+	h := harness.New(t)
+	h.Post("/rpc/get_todos_count",
+		nil,
+		harness.H_("Prefer", "count=exact"),
+		map[string]interface{}{},
+	).Status(200)
+}
+
+func TestRpcAddGet(t *testing.T) {
+	h := harness.New(t)
+	h.Get("/rpc/add", harness.P("a", "5", "b", "3"), nil).
+		Status(200).
+		BodyContains("8")
+}
+
+// ---------------------------------------------------------------------------
+// Transaction rollback
+// ---------------------------------------------------------------------------
+
+func TestTxRollback(t *testing.T) {
+	h := harness.New(t)
+	r := h.Post("/todos",
+		harness.P("select", "id,task"),
+		harness.H_("Prefer", "tx=rollback,return=representation"),
+		map[string]interface{}{"task": "go-txrollback-xz9m", "done": false},
+	)
+	r.StatusIn(200, 201)
+	// Verify row was not persisted
+	check := h.Get("/todos", harness.P("task", "eq.go-txrollback-xz9m"), nil)
+	check.Status(200).ArrayLen(0)
 }
 
 // ---------------------------------------------------------------------------
