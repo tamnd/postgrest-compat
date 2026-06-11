@@ -229,7 +229,7 @@ jobs:
 
       - name: wait for MySQL
         run: |
-          for i in $(seq 1 40); do
+          for i in $(seq 1 80); do
             if docker exec compat-mysql-dbrest mysqladmin ping -h localhost -u dbrest -pDbrest\!Passw0rd --silent > /dev/null 2>&1; then
               echo "MySQL is up"
               exit 0
