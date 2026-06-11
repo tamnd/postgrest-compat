@@ -159,9 +159,9 @@ GO
 -- Scalar procs return a single column named after the proc so renderCall detects
 -- them as scalar: len(cols)==1 && cols[0]==fnName heuristic.
 
-IF OBJECT_ID('dbo.add', 'P') IS NOT NULL DROP PROCEDURE dbo.add;
+IF OBJECT_ID('dbo.add', 'P') IS NOT NULL DROP PROCEDURE dbo.[add];
 GO
-CREATE PROCEDURE dbo.add
+CREATE PROCEDURE dbo.[add]
     @a INT,
     @b INT
 AS
