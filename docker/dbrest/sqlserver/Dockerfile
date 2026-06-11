@@ -1,8 +1,10 @@
 FROM mcr.microsoft.com/mssql/server:2022-latest
 USER root
-# Detect Ubuntu release, add the matching Microsoft mssql-server-2022 repo,
-# then install the Full-Text Search feature package.
-RUN . /etc/os-release \
+# Add the Microsoft mssql-server-2022 package repository and install Full-Text
+# Search. gnupg and curl must be available before the key import step.
+RUN apt-get update -q \
+    && apt-get install -y --no-install-recommends gnupg curl \
+    && . /etc/os-release \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] \
