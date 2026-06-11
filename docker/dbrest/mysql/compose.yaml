@@ -1,9 +1,11 @@
-# MySQL 8.4 only — used by CI to test against dbrest built from source.
+# MySQL 8.0 — used by CI to test against dbrest built from source.
+# Pinned to 8.0 (not 8.4) because 8.4 removed mysql_native_password which the
+# Go driver requires; 8.0 still supports it as the default auth plugin.
 # dbrest is checked out and compiled as a host process; the container exposes
 # the standard MySQL port on 3306. The database `api` holds all compat tables.
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.0
     container_name: compat-mysql-dbrest
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
@@ -15,6 +17,7 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "dbrest", "-pDbrest!Passw0rd"]
       interval: 5s

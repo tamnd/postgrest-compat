@@ -242,8 +242,6 @@ jobs:
 
       - name: init MySQL database
         run: |
-          docker exec compat-mysql-dbrest mysql -u root -prootpassword -e \
-            "ALTER USER 'dbrest'@'%' IDENTIFIED WITH mysql_native_password BY 'Dbrest!Passw0rd'; FLUSH PRIVILEGES;"
           docker exec -i compat-mysql-dbrest mysql -u dbrest -pDbrest\!Passw0rd api < docker/dbrest/mysql/schema.sql
           docker exec -i compat-mysql-dbrest mysql -u dbrest -pDbrest\!Passw0rd api < docker/dbrest/mysql/seed.sql
 
