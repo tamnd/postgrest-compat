@@ -248,7 +248,7 @@ jobs:
       - name: start dbrest
         run: |
           REGISTRY='[{"name":"add","params":[{"name":"a","type":"integer"},{"name":"b","type":"integer"}],"returns":{"kind":"scalar","type":"integer"},"volatility":"stable","sql":"SELECT :a + :b"},{"name":"get_todos_count","params":[],"returns":{"kind":"scalar","type":"integer"},"volatility":"stable","sql":"SELECT count(*) FROM todos"},{"name":"get_person_by_name","params":[{"name":"name_param","type":"text"}],"returns":{"kind":"table","columns":[{"name":"id","type":"integer"},{"name":"name","type":"text"},{"name":"age","type":"integer"},{"name":"email","type":"text"}]},"volatility":"stable","sql":"SELECT id, name, age, email FROM persons WHERE name = :name_param"}]'
-          PGRST_DB_URI="dbrest:Dbrest\!Passw0rd@tcp(127.0.0.1:3306)/api?parseTime=true" \
+          PGRST_DB_URI='dbrest:Dbrest!Passw0rd@tcp(127.0.0.1:3306)/api?parseTime=true' \
           PGRST_DB_SCHEMAS="api, private" \
           PGRST_DB_ANON_ROLE=web_anon \
           PGRST_JWT_SECRET=reallyreallyreallyreallyverysafe \
