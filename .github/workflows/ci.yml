@@ -354,7 +354,7 @@ jobs:
 
       - name: start dbrest
         run: |
-          PGRST_DB_URI="sqlserver://sa:Dbrest\!Passw0rd1@127.0.0.1:1433?database=compat" \
+          PGRST_DB_URI="sqlserver://sa:Dbrest%21Passw0rd1@127.0.0.1:1433?database=compat" \
           PGRST_DB_SCHEMAS="dbo, private" \
           PGRST_DB_ANON_ROLE=web_anon \
           PGRST_JWT_SECRET=reallyreallyreallyreallyverysafe \
